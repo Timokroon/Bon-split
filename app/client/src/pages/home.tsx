@@ -1,8 +1,18 @@
 import { useMemo, useState } from "react";
 
 // Nieuwe header met grote titel + input rechtsboven
-import Header from "../components/Header";
+import Header from "@/components/Header";
 
+export default function Home() {
+  return (
+    <>
+      <Header />
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* hier komt je bestaande content */}
+      </main>
+    </>
+  );
+}
 // Bestaande secties
 import OrderInput from "../components/order-input";
 import OrdersList from "../components/orders-list";
