@@ -79,21 +79,18 @@ export default function Home() {
     <div className="min-h-screen bg-slate-50">
       {/* Enkele header (A1) */}
       <header className="bg-white shadow-sm border-b border-slate-200">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-md bg-primary-500" aria-hidden />
-              <h1 className="text-xl font-bold text-slate-800">Bon-split</h1>
-            </div>
-            <input
-              className="w-56 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-400"
-              placeholder="Restaurantnaam"
-              value={restaurantName}
-              onChange={(e) => setRestaurantName(e.target.value)}
-            />
-          </div>
-        </div>
-      </header>
+  <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+    <div className="flex items-center gap-3">
+      {/* Logo: blauwe cirkel met euroteken */}
+      <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
+        €
+      </div>
+      {/* App-naam aanpassen hier */}
+      <h1 className="text-xl font-bold text-slate-800">Bill Splitter</h1>
+    </div>
+  </div>
+</header>
+
 
       {/* Main */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
