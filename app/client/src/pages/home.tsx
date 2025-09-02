@@ -1,11 +1,11 @@
-// app/client/src/pages/home.tsx
 import * as React from "react";
-
 import OrderInput from "../components/order-input";
 import OrdersList from "../components/orders-list";
 import ReceiptUpload from "../components/receipt-upload";
 import PeopleManager, { Person } from "../components/people-manager";
 import { onAddOrder, type AddOrderPayload } from "../lib/order-bus";
+// Icons
+import { User, PlusCircle, List as ListIcon } from "lucide-react";
 
 export type OrderItem = {
   id: string;
@@ -16,19 +16,33 @@ export type OrderItem = {
 };
 
 export default function Home() {
-  // Personen als Person[]
   const [people, setPeople] = React.useState<Person[]>([]);
-
-  // Huidige bestellingen (lokaal)
   const [orders, setOrders] = React.useState<OrderItem[]>([]);
 
-  // totalen
   const totalItems = React.useMemo(
     () => orders.reduce((s, o) => s + (o.qty || 0), 0),
     [orders]
   );
 
-  // ± en verwijderen
+  const ensurePerson = React.useCallback(
+    (name: string): Person => {
+      const trimmed = name.trim();
+      const found = people.find(
+        (p) => p.name.toLowerCase() === trimmed.toLowerCase()
+      );
+      if (found) return found;
+      const newP: Person = {
+        id: crypto.randomUUID(),
+        name: trimmed,
+        initial: trimmed.charAt(0).toUpperCase(),
+        color: "bg-blue-500",
+      };
+      setPeople((prev) => [...prev, newP]);
+      return newP;
+    },
+    [people]
+  );
+
   const updateQty = (id: string, delta: number) => {
     setOrders((prev) =>
       prev
@@ -41,10 +55,14 @@ export default function Home() {
   const removeOrder = (id: string) =>
     setOrders((prev) => prev.filter((o) => o.id !== id));
 
-  // Luister naar OrderInput → onAddOrder (met type-annotatie)
   React.useEffect(() => {
     const off = onAddOrder(
       ({ label, qty = 1, personName, price }: AddOrderPayload) => {
+        let assigned = personName?.trim() || undefined;
+        if (assigned) {
+          const p = ensurePerson(assigned);
+          assigned = p.name;
+        }
         const id = crypto.randomUUID();
         setOrders((prev) => [
           ...prev,
@@ -52,75 +70,71 @@ export default function Home() {
             id,
             label: label.trim(),
             qty: Math.max(1, qty),
-            personName,
+            personName: assigned,
             price,
           },
         ]);
       }
     );
     return off;
-  }, []);
-
-  // Header: restaurantnaam met localStorage
-  const [restaurantName, setRestaurantName] = React.useState("");
-  React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("restaurantName");
-      if (saved) setRestaurantName(saved);
-    } catch {}
-  }, []);
-  React.useEffect(() => {
-    try {
-      localStorage.setItem("restaurantName", restaurantName);
-    } catch {}
-  }, [restaurantName]);
+  }, [ensurePerson]);
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Enkele header (A1) */}
+      {/* Header */}
       <header className="bg-white shadow-sm border-b border-slate-200">
-  <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-    <div className="flex items-center gap-3">
-      {/* Logo: blauwe cirkel met euroteken */}
-      <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
-        €
-      </div>
-      {/* App-naam aanpassen hier */}
-      <h1 className="text-xl font-bold text-slate-800">Bill Splitter</h1>
-    </div>
-  </div>
-</header>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
+              €
+            </div>
+            {/* App-naam aangepast */}
+            <h1 className="text-xl font-bold text-slate-800">Group Splitter</h1>
+          </div>
+        </div>
+      </header>
 
-
-      {/* Main */}
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Links */}
-          <section className="space-y-6">
+      {/* 3 kolommen */}
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Kolom 1: NIEUWE BESTELLING boven, MENSEN TOEVOEGEN eronder */}
+          <div className="space-y-6">
+            {/* Nieuwe Bestelling */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-              <h2 className="text-lg font-semibold text-slate-800 mb-4">
-                Nieuwe Bestelling
-              </h2>
-              <OrderInput people={people} />
-              <div className="mt-4 text-xs text-slate-500">
-                Snelle toevoegingen verschijnen direct hieronder.
+              <div className="flex items-center gap-2 mb-4">
+                <PlusCircle className="w-5 h-5 text-emerald-600" />
+                <h2 className="text-lg font-semibold text-slate-800">
+                  Nieuwe Bestelling
+                </h2>
               </div>
+              <OrderInput people={people} />
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-              <h2 className="text-lg font-semibold text-slate-800 mb-4">
-                Personen beheren
-              </h2>
+            {/* Mensen toevoegen */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <User className="w-5 h-5 text-slate-700" />
+                <h2 className="text-lg font-semibold text-slate-800">
+                  Mensen toevoegen
+                </h2>
+              </div>
               <PeopleManager people={people} onPeopleChange={setPeople} />
             </div>
+          </div>
 
+          {/* Kolom 2: HUIDIGE BESTELLINGEN */}
+          <div>
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-slate-800">
-                  Huidige Bestellingen
-                </h2>
+                <div className="flex items-center gap-2">
+                  <ListIcon className="w-5 h-5 text-blue-600" />
+                  <h2 className="text-lg font-semibold text-slate-800">
+                    Huidige Bestellingen
+                  </h2>
+                </div>
                 <span className="text-xs text-slate-500">{totalItems} items</span>
               </div>
+
               <div className="mt-3">
                 <OrdersList
                   orders={orders}
@@ -133,25 +147,13 @@ export default function Home() {
                 />
               </div>
             </div>
-          </section>
+          </div>
 
-          {/* Rechts */}
-          <section>
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-              <h2 className="text-lg font-semibold text-slate-800 mb-4">
-                Bon Uploaden
-              </h2>
-              <ReceiptUpload />
-              <div className="mt-6">
-                <button className="w-full rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5">
-                  Afronden & Rekening Verdelen
-                </button>
-                <p className="mt-2 text-xs text-slate-500">
-                  Ga naar het verdeelscherm om kosten op te splitsen.
-                </p>
-              </div>
-            </div>
-          </section>
+          {/* Kolom 3: BON UPLOADEN (alleen inner card, geen extra rand eromheen) */}
+          <div>
+            {/* Geen extra border/wrapper — ReceiptUpload rendert zijn eigen mooie kaart */}
+            <ReceiptUpload />
+          </div>
         </div>
       </main>
     </div>
