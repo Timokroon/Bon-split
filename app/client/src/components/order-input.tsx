@@ -1,8 +1,5 @@
 import { useState } from "react";
 import { Plus, Mic, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -15,128 +12,102 @@ interface ProcessOrderResponse {
   message: string;
 }
 
-interface OrderInputProps {
-  people: Person[];
+type Props = { people: Person[] };
+
+function parseLine(text: string, people: Person[]): { personName?: string; itemLabel: string } {
+  const raw = text.trim();
+  const match = raw.match(/^(\S+)\s+(.+)$/); // "naam rest"
+  if (!match) return { itemLabel: raw };
+  const candidate = match[1];
+  const rest = match[2].trim();
+  if (!rest) return { itemLabel: raw };
+  const found = people.find(p => p.name.toLowerCase() === candidate.toLowerCase());
+  return { personName: found ? found.name : candidate, itemLabel: rest };
 }
 
-export default function OrderInput({ people }: OrderInputProps) {
-  const [orderText, setOrderText] = useState("");
+export default function OrderInput({ people }: Props) {
+  const [text, setText] = useState("");
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const qc = useQueryClient();
 
-  const processOrderMutation = useMutation({
-    mutationFn: async (text: string): Promise<ProcessOrderResponse> => {
-      const response = await apiRequest("POST", "/api/chat", { text });
-      return response.json();
+  const mutation = useMutation({
+    mutationFn: async (t: string): Promise<ProcessOrderResponse> => {
+      const res = await apiRequest("POST", "/api/chat", { text: t });
+      return res.json();
     },
     onSuccess: (data) => {
-      setOrderText("");
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      setText("");
+      qc.invalidateQueries({ queryKey: ["/api/orders"] });
       toast({ title: "Bestelling toegevoegd!", description: data.message });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Fout bij verwerken bestelling",
-        description: error?.message ?? "Onbekende fout",
-        variant: "destructive",
-      });
     },
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = orderText.trim();
-    if (!text) return;
-
-    // 1) Optimistic UI: meteen tonen in "Huidige Bestellingen"
-    emitAddOrder({ label: text, qty: 1 });
-
-    // 2) Backend/AI flow laten draaien
-    processOrderMutation.mutate(text);
+  const submit = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const t = text.trim();
+    if (!t) return;
+    const parsed = parseLine(t, people);
+    emitAddOrder({ label: parsed.itemLabel, qty: 1, personName: parsed.personName });
+    mutation.mutate(t); // backend mag later AI doen
   };
 
-  const clearInput = () => setOrderText("");
-
-  const names = people.map((p) => p.name);
-  const quickAddItems =
-    names.length > 0
-      ? [
-          { label: `${names[0]} bier`, text: `${names[0]} bier` },
-          { label: `${names[0]} cola`, text: `${names[0]} cola` },
-          ...(names.length > 1
-            ? [
-                {
-                  label: `${names.slice(0, 2).join(" en ")} pizza`,
-                  text: `${names.slice(0, 2).join(" en ")} pizza`,
-                },
-              ]
-            : []),
-        ]
-      : [{ label: "Voeg eerst mensen toe", text: "" }];
-
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-      <div className="flex items-center space-x-3 mb-4">
-        <Plus className="text-primary-500 text-lg" />
-        <h2 className="text-lg font-semibold text-slate-800">Nieuwe Bestelling</h2>
-      </div>
-
-      <form onSubmit={handleSubmit}>
-        <div className="space-y-4">
-          <div>
-            <Label htmlFor="orderInput" className="block text-sm font-medium text-slate-700 mb-2">
-              Voer bestelling in (bijv. "Timo en Bart een biertje en pizza")
-            </Label>
-            <div className="relative">
-              <Input
-                id="orderInput"
-                value={orderText}
-                onChange={(e) => setOrderText(e.target.value)}
-                placeholder="Bijv: Timo en Bart een biertje en pizza"
-                className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-colors placeholder-slate-400 pr-10"
-                disabled={processOrderMutation.isPending}
-              />
-              {orderText && (
-                <button
-                  type="button"
-                  onClick={clearInput}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                >
-                  <X size={16} />
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="flex space-x-3">
-            <Button
-              type="submit"
-              disabled={!orderText.trim() || processOrderMutation.isPending}
-              className="flex-1 bg-primary-500 text-white font-medium py-3 px-4 rounded-lg hover:bg-primary-600 transition-colors focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+    <div>
+      <form onSubmit={submit} className="space-y-3">
+        <div className="relative">
+          <input
+            className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm focus:ring-2 focus:ring-primary-500 outline-none pr-10"
+            placeholder='Bijv: "Timo bier" of "Bart pizza"'
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit(e)}
+            disabled={mutation.isPending}
+          />
+          {text && (
+            <button
+              type="button"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              onClick={() => setText("")}
+              aria-label="Leegmaken"
             >
-              <Plus className="mr-2" size={16} />
-              {processOrderMutation.isPending ? "Verwerken..." : "Bestelling Toevoegen"}
-            </Button>
-            <Button type="button" variant="outline" className="px-4 py-3 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50">
-              <Mic size={16} />
-            </Button>
-          </div>
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-3 text-white hover:bg-primary-600"
+            disabled={!text.trim() || mutation.isPending}
+          >
+            <Plus className="w-4 h-4" />
+            Bestelling toevoegen
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-3 text-slate-600 hover:bg-slate-50"
+            aria-label="Spraak (later)"
+          >
+            <Mic className="w-4 h-4" />
+          </button>
         </div>
       </form>
 
-      <div className="mt-4 pt-4 border-t border-slate-100">
-        <p className="text-xs text-slate-500 mb-2">Snelle toevoegingen:</p>
-        <div className="flex flex-wrap gap-2">
-          {quickAddItems.map((item) => (
-            <button
-              key={item.label}
-              onClick={() => item.text && setOrderText(item.text)}
-              className="text-xs bg-slate-100 text-slate-700 px-3 py-1 rounded-full hover:bg-slate-200 transition-colors"
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+      {/* Snelle toevoegingen (klein en op 1 regel) */}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {(people[0]?.name ? [`${people[0].name} bier`, `${people[0].name} cola`] : []).map((q) => (
+          <button
+            key={q}
+            onClick={() => setText(q)}
+            className="text-xs rounded-full bg-slate-100 px-3 py-1 hover:bg-slate-200"
+          >
+            {q}
+          </button>
+        ))}
+        {people.length === 0 && (
+          <span className="text-xs text-slate-500">Voeg eerst mensen toe</span>
+        )}
       </div>
     </div>
   );
