@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { ocrImage, parseReceipt, type ParsedItem } from "@/lib/ocr";
 
 type ReceiptUploadResponse = {
   success: boolean;
@@ -21,13 +22,18 @@ export default function ReceiptUpload() {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  // OCR state
+  const [ocrText, setOcrText] = useState<string>("");
+  const [parsed, setParsed] = useState<ParsedItem[]>([]);
+  const [isOcrRunning, setIsOcrRunning] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
   const isImage = useMemo(() => (file ? file.type.startsWith("image/") : false), [file]);
 
-  // preview URL netjes opruimen
+  // preview cleanup
   const revokePreview = useCallback(() => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
@@ -35,7 +41,6 @@ export default function ReceiptUpload() {
 
   useEffect(() => {
     return () => {
-      // cleanup bij unmount
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
@@ -47,6 +52,9 @@ export default function ReceiptUpload() {
       if (f.type.startsWith("image/")) {
         setPreviewUrl(URL.createObjectURL(f));
       }
+      // reset OCR output bij nieuw bestand
+      setOcrText("");
+      setParsed([]);
     },
     [revokePreview]
   );
@@ -72,6 +80,7 @@ export default function ReceiptUpload() {
     setSelectedFile(f);
   };
 
+  // (optioneel) server upload — gelaten voor later gebruik
   const uploadMutation = useMutation({
     mutationFn: async (f: File): Promise<ReceiptUploadResponse> => {
       const formData = new FormData();
@@ -88,8 +97,7 @@ export default function ReceiptUpload() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "Bon verwerkt", description: data.message || "OCR voltooid." });
-      // Broadcast voor andere schermen indien gewenst
+      toast({ title: "Bon verwerkt (server)", description: data.message || "OCR voltooid." });
       window.dispatchEvent(new CustomEvent("receiptProcessed", { detail: data }));
     },
     onError: (error: any) => {
@@ -103,6 +111,13 @@ export default function ReceiptUpload() {
 
   // Handlers
   const onBrowseClick = () => fileInputRef.current?.click();
+
+  // alleen klik op de container zelf opent de file-picker
+  const onDropzoneClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isOcrRunning || uploadMutation.isPending) return;
+    if (e.target !== e.currentTarget) return;
+    onBrowseClick();
+  };
 
   const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -126,23 +141,112 @@ export default function ReceiptUpload() {
   const onClear = () => {
     setFile(null);
     revokePreview();
+    setOcrText("");
+    setParsed([]);
   };
 
-  const onStartUpload = () => {
+  /**
+   * Zet geparste prijzen op bestaande orders in localStorage (label-match).
+   * Returned hoeveel orders een (nieuwe) prijs hebben gekregen.
+   */
+  function applyParsedToOrders(items: ParsedItem[]) {
+    if (!items.length) return { updated: 0 };
+
+    let orders: any[] = [];
+    try {
+      orders = JSON.parse(localStorage.getItem("ordersV1") || "[]");
+    } catch {}
+
+    if (!Array.isArray(orders) || !orders.length) return { updated: 0 };
+
+    // label -> price lookup
+    const priceByLabel = new Map<string, number>();
+    for (const it of items) {
+      if (typeof it.price === "number") {
+        priceByLabel.set(it.label.toLowerCase(), it.price);
+      }
+    }
+
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+    let updated = 0;
+
+    for (const o of orders) {
+      const lbl = norm(o.label || "");
+      let price = priceByLabel.get(lbl);
+
+      if (price === undefined) {
+        priceByLabel.forEach((v, k) => {
+          if (price === undefined && (lbl.startsWith(k) || k.startsWith(lbl))) {
+            price = v;
+          }
+        });
+      }
+
+      if (typeof price === "number" && (!o.price || o.price === 0)) {
+        o.price = price; // per stuk
+        updated++;
+      }
+    }
+
+    try {
+      localStorage.setItem("ordersV1", JSON.stringify(orders));
+    } catch {}
+    window.dispatchEvent(new Event("ordersUpdated"));
+
+    return { updated };
+  }
+
+  // OCR lokaal
+  const onStartUpload = async () => {
     if (!file) {
-      toast({
-        title: "Geen bestand gekozen",
-        description: "Kies of sleep eerst een bon.",
-      });
+      toast({ title: "Geen bestand gekozen", description: "Kies of sleep eerst een bon." });
       return;
     }
-    uploadMutation.mutate(file);
+
+    try {
+      setIsOcrRunning(true);
+      setOcrText("");
+      setParsed([]);
+
+      const text = await ocrImage(file);
+      setOcrText(text);
+
+      // parse items + tip
+      const parsedReceipt = parseReceipt(text);
+      const items = parsedReceipt.items;
+      setParsed(items);
+
+      // prijzen toepassen
+      const withPrices = items.filter((i) => typeof i.price === "number");
+      const { updated } = applyParsedToOrders(withPrices);
+
+      // fooi opslaan (zodat BillSplitting ‘m kan oppakken)
+      if (typeof parsedReceipt.tip === "number") {
+        localStorage.setItem("tipDetected", String(parsedReceipt.tip));
+        window.dispatchEvent(new Event("tipUpdated"));
+      }
+
+      toast({
+        title: "Bon gelezen",
+        description: `OCR: ${items.length} itemregel(s), prijzen toegepast op ${updated} order(s)${
+          parsedReceipt.tip ? `, fooi gedetecteerd: €${parsedReceipt.tip.toFixed(2)}` : ""
+        }.`,
+      });
+
+      console.log("OCR tekst:\n", text);
+      console.log("Geparste items:", items, "Tip:", parsedReceipt.tip);
+    } catch (err: any) {
+      toast({
+        title: "Fout bij OCR",
+        description: String(err?.message || err),
+        variant: "destructive",
+      });
+    } finally {
+      setIsOcrRunning(false);
+    }
   };
 
-  const goSplit = () => {
-    // Client-side navigatie naar scherm 2 (geen page refresh)
-    setLocation("/bill-splitting");
-  };
+  const goSplit = () => setLocation("/bill-splitting");
 
   return (
     <div className="rounded-xl shadow-sm border border-slate-200 bg-white p-6">
@@ -157,14 +261,14 @@ export default function ReceiptUpload() {
           "rounded-lg border-2 border-dashed p-6 text-center cursor-pointer transition",
           dragOver
             ? "border-blue-400 bg-blue-50/50"
-            : uploadMutation.isPending
+            : isOcrRunning || uploadMutation.isPending
             ? "border-slate-200 bg-slate-50"
             : "border-slate-300 hover:border-blue-400 hover:bg-blue-50/30",
         ].join(" ")}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
-        onClick={!uploadMutation.isPending ? onBrowseClick : undefined}
+        onClick={onDropzoneClick}
       >
         <input
           ref={fileInputRef}
@@ -172,7 +276,7 @@ export default function ReceiptUpload() {
           className="hidden"
           accept="image/*,.pdf"
           onChange={onInputChange}
-          disabled={uploadMutation.isPending}
+          disabled={isOcrRunning || uploadMutation.isPending}
         />
 
         {!file ? (
@@ -180,9 +284,9 @@ export default function ReceiptUpload() {
             <div className="mx-auto mb-1 h-12 w-12 rounded-full bg-slate-100 grid place-items-center">
               <Camera className="w-6 h-6 text-slate-500" />
             </div>
-            {uploadMutation.isPending ? (
+            {isOcrRunning ? (
               <>
-                <p className="font-medium text-slate-700">Bon wordt verwerkt…</p>
+                <p className="font-medium text-slate-700">Bon wordt gelezen…</p>
                 <p className="text-sm text-slate-500">Even geduld terwijl we de tekst analyseren</p>
               </>
             ) : (
@@ -197,8 +301,11 @@ export default function ReceiptUpload() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={onBrowseClick}
-                disabled={uploadMutation.isPending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBrowseClick();
+                }}
+                disabled={isOcrRunning || uploadMutation.isPending}
                 className="inline-flex items-center gap-2"
               >
                 <Camera className="w-4 h-4" />
@@ -207,8 +314,11 @@ export default function ReceiptUpload() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={onBrowseClick}
-                disabled={uploadMutation.isPending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBrowseClick();
+                }}
+                disabled={isOcrRunning || uploadMutation.isPending}
                 className="inline-flex items-center gap-2"
               >
                 <FolderOpen className="w-4 h-4" />
@@ -222,9 +332,7 @@ export default function ReceiptUpload() {
               <div className="flex-1">
                 <div className="text-sm text-slate-700">
                   <span className="font-medium">Bestand:</span> {file.name}{" "}
-                  <span className="text-slate-400">
-                    ({Math.ceil(file.size / 1024)} KB)
-                  </span>
+                  <span className="text-slate-400">({Math.ceil(file.size / 1024)} KB)</span>
                 </div>
 
                 {isImage && previewUrl ? (
@@ -243,8 +351,11 @@ export default function ReceiptUpload() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={onClear}
-                disabled={uploadMutation.isPending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClear();
+                }}
+                disabled={isOcrRunning || uploadMutation.isPending}
                 className="shrink-0 inline-flex items-center gap-2"
                 title="Bestand verwijderen"
               >
@@ -256,8 +367,11 @@ export default function ReceiptUpload() {
             <div className="mt-4 flex gap-3">
               <Button
                 type="button"
-                onClick={onStartUpload}
-                disabled={uploadMutation.isPending || !file}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStartUpload();
+                }}
+                disabled={isOcrRunning || !file}
                 className="inline-flex items-center gap-2"
               >
                 <CloudUpload className="w-4 h-4" />
@@ -266,17 +380,52 @@ export default function ReceiptUpload() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={onBrowseClick}
-                disabled={uploadMutation.isPending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBrowseClick();
+                }}
+                disabled={isOcrRunning}
               >
                 Ander bestand…
               </Button>
             </div>
+
+            {/* OCR resultaten */}
+            {(ocrText || parsed.length > 0) && (
+              <div className="mt-5 space-y-3">
+                {parsed.length > 0 && (
+                  <div className="rounded-lg border border-slate-200 p-3">
+                    <div className="font-semibold mb-2 text-slate-800">
+                      Herkende items ({parsed.length})
+                    </div>
+                    <ul className="text-sm text-slate-700 list-disc ml-5">
+                      {parsed.map((it, i) => (
+                        <li key={i}>
+                          {it.qty}× {it.label}
+                          {typeof it.price === "number" && <> — €{it.price.toFixed(2)} p/st</>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {ocrText && (
+                  <details className="rounded-lg border border-slate-200">
+                    <summary className="cursor-pointer px-3 py-2 font-medium text-slate-800">
+                      Ruwe OCR-tekst tonen
+                    </summary>
+                    <pre className="p-3 text-xs whitespace-pre-wrap text-slate-700">
+                      {ocrText}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Primaire actie: ALTIJD client-side naar scherm 2, geen refresh */}
+      {/* Primaire actie: naar scherm 2 */}
       <div className="mt-6">
         <Button
           type="button"

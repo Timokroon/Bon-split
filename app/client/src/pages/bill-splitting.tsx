@@ -1,17 +1,36 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft, Receipt, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useOrders } from "@/hooks/use-orders";
-import ReceiptUpload from "@/components/receipt-upload"; // 👈 BELANGRIJK: deze import ontbrak
+import ReceiptUpload from "@/components/receipt-upload";
 
 export default function BillSplitting() {
   const [, setLocation] = useLocation();
   const { data: orders = [], people = [] } = useOrders();
   const { toast } = useToast();
-  const [tipPercentage, setTipPercentage] = useState(0);
+
+  // Tip modes
+  const [tipPercentage, setTipPercentage] = useState<number>(0);
+  const [cashTip, setCashTip] = useState<number>(0);
+  const [tipMode, setTipMode] = useState<"none" | "percent" | "cash">("none");
+
+  // lees fooi gedetecteerd door OCR (optioneel)
+  useEffect(() => {
+    const update = () => {
+      const t = Number(localStorage.getItem("tipDetected") || "0");
+      if (t > 0) {
+        setTipMode("cash");
+        setCashTip(t);
+        toast({ title: "Fooi gevonden", description: `OCR herkende €${t.toFixed(2)} fooi (cash).` });
+      }
+    };
+    update();
+    window.addEventListener("tipUpdated", update);
+    return () => window.removeEventListener("tipUpdated", update);
+  }, [toast]);
 
   const goBack = () => setLocation("/");
 
@@ -20,19 +39,13 @@ export default function BillSplitting() {
     [orders]
   );
 
-  // Group by personName
+  // Group orders by person
   const ordersByUser = useMemo(() => {
-    const acc: Record<
-      string,
-      { orders: typeof orders; total: number; color: string; initial: string }
-    > = {};
-
-    orders.forEach((o) => {
-      const key = o.personName?.trim() || "Onbekend";
+    const acc: Record<string, { orders: typeof orders; total: number; color: string; initial: string }> = {};
+    orders.forEach((o: any) => {
+      const key = (o.personName || "Onbekend").trim();
       if (!acc[key]) {
-        const p = people.find(
-          (pp) => pp.name.toLowerCase() === key.toLowerCase()
-        );
+        const p = people.find((pp: any) => pp.name.toLowerCase() === key.toLowerCase());
         acc[key] = {
           orders: [],
           total: 0,
@@ -40,24 +53,53 @@ export default function BillSplitting() {
           initial: p?.initial || key.charAt(0).toUpperCase(),
         };
       }
-      acc[key].orders.push(o as any);
+      acc[key].orders.push(o);
       acc[key].total += (o.price || 0) * (o.qty || 0);
     });
-
     return acc;
   }, [orders, people]);
 
-  const handleTipDistribution = (percentage: number) => {
-    const tipAmount = totalEstimated * (percentage / 100);
-    const persons = Math.max(1, Object.keys(ordersByUser).length);
-    const perPersonTip = tipAmount / persons;
+  const personsCount = Math.max(1, Object.keys(ordersByUser).length);
 
+  // bereken totale tip
+  const computedTip =
+    tipMode === "percent"
+      ? totalEstimated * (tipPercentage / 100)
+      : tipMode === "cash"
+      ? cashTip
+      : 0;
+
+  const handleTipPercent = (p: number) => {
+    setTipMode("percent");
+    setTipPercentage(p);
+    setCashTip(0);
     toast({
-      title: "Fooi verdeeld",
-      description: `€${tipAmount.toFixed(2)} fooi (${percentage}%) verdeeld over ${persons} personen: €${perPersonTip.toFixed(2)} p.p.`,
+      title: "Fooi (percentage)",
+      description: `€${(totalEstimated * (p / 100)).toFixed(2)} (${p}%) wordt gelijk over ${personsCount} personen verdeeld.`,
     });
+  };
 
-    setTipPercentage(percentage);
+  const handleCashTip = () => {
+    const input = window.prompt("Cash fooi bedrag (bijv. 2,50):", cashTip ? String(cashTip).replace(".", ",") : "");
+    if (input === null) return;
+    const n = Number(input.replace(",", "."));
+    if (!isFinite(n) || n < 0) {
+      toast({ title: "Ongeldig bedrag", description: "Voer een positief bedrag in.", variant: "destructive" });
+      return;
+    }
+    setTipMode("cash");
+    setCashTip(Number(n.toFixed(2)));
+    setTipPercentage(0);
+    toast({
+      title: "Cash fooi ingesteld",
+      description: `€${n.toFixed(2)} wordt gelijk over ${personsCount} personen verdeeld.`,
+    });
+  };
+
+  const handleNoTip = () => {
+    setTipMode("none");
+    setTipPercentage(0);
+    setCashTip(0);
   };
 
   return (
@@ -67,11 +109,7 @@ export default function BillSplitting() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <Button
-                variant="ghost"
-                onClick={goBack}
-                className="text-slate-600 hover:text-slate-800"
-              >
+              <Button variant="ghost" onClick={goBack} className="text-slate-600 hover:text-slate-800">
                 <ArrowLeft size={20} />
               </Button>
               <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center">
@@ -102,60 +140,50 @@ export default function BillSplitting() {
                   </p>
                 ) : (
                   <div className="space-y-4">
-                    {Object.entries(ordersByUser).map(([userName, userData]) => (
-                      <div key={userName} className="p-4 bg-slate-50 rounded-lg">
-                        <div className="flex items-center gap-3 mb-2">
-                          <div
-                            className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold ${userData.color}`}
-                          >
-                            {userData.initial}
-                          </div>
-                          <h3 className="font-semibold text-slate-800">{userName}</h3>
-                        </div>
-                        <div className="space-y-1 ml-11">
-                          {userData.orders.map((order) => (
-                            <div key={order.id} className="flex justify-between text-sm">
-                              <span>{order.qty}x {order.label}</span>
-                              <span>€{(((order.price || 0) * (order.qty || 0))).toFixed(2)}</span>
+                    {Object.entries(ordersByUser).map(([userName, userData]) => {
+                      const personTipShare = personsCount > 0 ? computedTip / personsCount : 0;
+                      const totalWithTip = userData.total + (tipMode !== "none" ? personTipShare : 0);
+                      return (
+                        <div key={userName} className="p-4 bg-slate-50 rounded-lg">
+                          <div className="flex items-center gap-3 mb-2">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold ${userData.color}`}>
+                              {userData.initial}
                             </div>
-                          ))}
-                          <div className="flex justify-between font-semibold text-slate-800 border-t pt-1 mt-2">
-                            <span>Subtotaal:</span>
-                            <span>€{userData.total.toFixed(2)}</span>
+                            <h3 className="font-semibold text-slate-800">{userName}</h3>
                           </div>
-
-                          {tipPercentage > 0 && (
-                            <>
-                              <div className="flex justify-between text-sm text-slate-600">
-                                <span>Fooi ({tipPercentage}%):</span>
-                                <span>
-                                  €{(
-                                    (totalEstimated * (tipPercentage / 100)) /
-                                    Math.max(1, Object.keys(ordersByUser).length)
-                                  ).toFixed(2)}
-                                </span>
+                          <div className="space-y-1 ml-11">
+                            {userData.orders.map((order: any) => (
+                              <div key={order.id} className="flex justify-between text-sm">
+                                <span>{order.qty}x {order.label}</span>
+                                <span>€{(((order.price || 0) * (order.qty || 0))).toFixed(2)}</span>
                               </div>
-                              <div className="flex justify-between font-bold text-emerald-600 border-t pt-1">
-                                <span>Totaal:</span>
-                                <span>
-                                  €{(
-                                    userData.total +
-                                    (totalEstimated * (tipPercentage / 100)) /
-                                      Math.max(1, Object.keys(ordersByUser).length)
-                                  ).toFixed(2)}
-                                </span>
-                              </div>
-                            </>
-                          )}
+                            ))}
+                            <div className="flex justify-between font-semibold text-slate-800 border-t pt-1 mt-2">
+                              <span>Subtotaal:</span>
+                              <span>€{userData.total.toFixed(2)}</span>
+                            </div>
+                            {tipMode !== "none" && (
+                              <>
+                                <div className="flex justify-between text-sm text-slate-600">
+                                  <span>Fooi {tipMode === "percent" ? `(${tipPercentage}%)` : "(cash)"}:</span>
+                                  <span>€{(personTipShare).toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between font-bold text-emerald-600 border-t pt-1">
+                                  <span>Totaal:</span>
+                                  <span>€{totalWithTip.toFixed(2)}</span>
+                                </div>
+                              </>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>
             </Card>
 
-            {/* Fooi */}
+            {/* Tip Section */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -166,39 +194,51 @@ export default function BillSplitting() {
               <CardContent>
                 <div className="space-y-4">
                   <div className="flex gap-2 flex-wrap">
-                    {[0, 10, 15, 20].map((percentage) => (
+                    <Button
+                      variant={tipMode === "none" ? "default" : "outline"}
+                      onClick={handleNoTip}
+                      className="flex-1"
+                    >
+                      Geen fooi
+                    </Button>
+                    <Button
+                      variant={tipMode === "cash" ? "default" : "outline"}
+                      onClick={handleCashTip}
+                      className="flex-1"
+                    >
+                      Cash
+                    </Button>
+                    {[10, 15, 20].map((p) => (
                       <Button
-                        key={percentage}
-                        variant={tipPercentage === percentage ? "default" : "outline"}
-                        onClick={() => handleTipDistribution(percentage)}
+                        key={p}
+                        variant={tipMode === "percent" && tipPercentage === p ? "default" : "outline"}
+                        onClick={() => handleTipPercent(p)}
                         className="flex-1"
                       >
-                        {percentage === 0 ? "Geen fooi" : `${percentage}%`}
+                        {p}%
                       </Button>
                     ))}
                   </div>
 
-                  {totalEstimated > 0 && (
-                    <div className="bg-slate-50 p-4 rounded-lg">
-                      <div className="flex justify-between items-center">
-                        <span className="font-semibold">Totaal rekening:</span>
-                        <span className="text-lg font-bold">
-                          €{(totalEstimated + totalEstimated * (tipPercentage / 100)).toFixed(2)}
-                        </span>
-                      </div>
-                      {tipPercentage > 0 && (
-                        <div className="text-sm text-slate-600 mt-1">
-                          Inclusief €{(totalEstimated * (tipPercentage / 100)).toFixed(2)} fooi
-                        </div>
-                      )}
+                  <div className="bg-slate-50 p-4 rounded-lg">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold">Totaal rekening:</span>
+                      <span className="text-lg font-bold">
+                        €{(totalEstimated + computedTip).toFixed(2)}
+                      </span>
                     </div>
-                  )}
+                    {tipMode !== "none" && (
+                      <div className="text-sm text-slate-600 mt-1">
+                        Inclusief €{computedTip.toFixed(2)} fooi ({tipMode === "cash" ? "cash" : `${tipPercentage}%`})
+                      </div>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Right: bon upload (optioneel) */}
+          {/* Right: bon upload */}
           <div className="space-y-6">
             <Card>
               <CardHeader>
