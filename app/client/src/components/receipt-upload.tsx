@@ -1,198 +1,286 @@
-import { useState, useRef } from "react";
-import { CloudUpload, Camera, FolderOpen, Calculator } from "lucide-react";
+import * as React from "react";
+import { useState, useRef, useMemo, useCallback } from "react";
+import { CloudUpload, Camera, FolderOpen, Calculator, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 
-interface ReceiptUploadResponse {
+type ReceiptUploadResponse = {
   success: boolean;
   receipt: any;
   splitResults: any[];
   message: string;
-}
+};
+
+const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED = ["image/jpeg", "image/png", "image/jpg", "application/pdf"];
 
 export default function ReceiptUpload() {
-  const [isDragOver, setIsDragOver] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
-  const uploadReceiptMutation = useMutation({
-    mutationFn: async (file: File): Promise<ReceiptUploadResponse> => {
-      const formData = new FormData();
-      formData.append('receipt', file);
-      
-      const response = await fetch('/api/receipt', {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to process receipt');
+  const isImage = useMemo(() => (file ? file.type.startsWith("image/") : false), [file]);
+
+  const revokePreview = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+  };
+
+  const setSelectedFile = useCallback(
+    (f: File) => {
+      setFile(f);
+      revokePreview();
+      if (f.type.startsWith("image/")) {
+        setPreviewUrl(URL.createObjectURL(f));
       }
-      
-      return response.json();
     },
-    onSuccess: (data) => {
+    [previewUrl]
+  );
+
+  const validateAndSet = (f: File | undefined | null) => {
+    if (!f) return;
+    if (!ALLOWED.includes(f.type)) {
       toast({
-        title: "Bon succesvol verwerkt!",
-        description: data.message,
-      });
-      // You could emit an event here to update the bill splitting results
-      window.dispatchEvent(new CustomEvent('receiptProcessed', { detail: data }));
-    },
-    onError: (error) => {
-      toast({
-        title: "Fout bij verwerken bon",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  });
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = () => {
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      handleFileUpload(files[0]);
-    }
-  };
-
-  const handleClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      handleFileUpload(files[0]);
-    }
-  };
-
-  const handleFileUpload = (file: File) => {
-    // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
-    if (!allowedTypes.includes(file.type)) {
-      toast({
-        title: "Ongeldig bestandstype",
-        description: "Alleen JPEG, PNG en PDF bestanden zijn toegestaan.",
+        title: "Ongeldig bestand",
+        description: "Alleen PNG, JPG en PDF zijn toegestaan.",
         variant: "destructive",
       });
       return;
     }
-
-    // Validate file size (10MB)
-    if (file.size > 10 * 1024 * 1024) {
+    if (f.size > MAX_SIZE) {
       toast({
         title: "Bestand te groot",
-        description: "Het bestand mag maximaal 10MB zijn.",
+        description: "Maximaal 10MB.",
         variant: "destructive",
       });
       return;
     }
+    setSelectedFile(f);
+  };
 
-    uploadReceiptMutation.mutate(file);
+  const uploadMutation = useMutation({
+    mutationFn: async (f: File): Promise<ReceiptUploadResponse> => {
+      const formData = new FormData();
+      formData.append("receipt", f);
+      const res = await fetch("/api/receipt", { method: "POST", body: formData });
+      if (!res.ok) {
+        let msg = "Upload mislukt";
+        try {
+          const err = await res.json();
+          msg = err?.message || msg;
+        } catch {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Bon verwerkt", description: data.message || "OCR voltooid." });
+      // Broadcast voor andere schermen indien gewenst
+      window.dispatchEvent(new CustomEvent("receiptProcessed", { detail: data }));
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Fout bij verwerken bon",
+        description: error?.message ?? "Onbekende fout.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Handlers
+  const onBrowseClick = () => fileInputRef.current?.click();
+
+  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    validateAndSet(f);
+    e.currentTarget.value = "";
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    validateAndSet(e.dataTransfer.files?.[0]);
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(true);
+  };
+
+  const onDragLeave = () => setDragOver(false);
+
+  const onClear = () => {
+    setFile(null);
+    revokePreview();
+  };
+
+  const onStartUpload = () => {
+    if (!file) {
+      toast({
+        title: "Geen bestand gekozen",
+        description: "Kies of sleep eerst een bon.",
+      });
+      return;
+    }
+    uploadMutation.mutate(file);
+  };
+
+  const goSplit = () => {
+    // Navigatie naar scherm 2 — los van uploadstatus
+    setLocation("/bill-splitting");
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-      <div className="flex items-center space-x-3 mb-4">
-        <CloudUpload className="text-amber-500 text-lg" />
+    <div className="rounded-xl shadow-sm border border-slate-200 bg-white p-6">
+      <div className="flex items-center gap-2 mb-4">
+        <CloudUpload className="w-5 h-5 text-amber-500" />
         <h2 className="text-lg font-semibold text-slate-800">Bon Uploaden</h2>
       </div>
 
-      {/* Upload Area */}
-      <div 
-        className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
-          isDragOver 
-            ? 'border-primary-400 bg-primary-50/30' 
-            : uploadReceiptMutation.isPending
-              ? 'border-slate-200 bg-slate-50'
-              : 'border-slate-300 hover:border-primary-400 hover:bg-primary-50/30'
-        }`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={!uploadReceiptMutation.isPending ? handleClick : undefined}
+      {/* Dropzone */}
+      <div
+        className={[
+          "rounded-lg border-2 border-dashed p-6 text-center cursor-pointer transition",
+          dragOver
+            ? "border-blue-400 bg-blue-50/50"
+            : uploadMutation.isPending
+            ? "border-slate-200 bg-slate-50"
+            : "border-slate-300 hover:border-blue-400 hover:bg-blue-50/30",
+        ].join(" ")}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        onClick={!uploadMutation.isPending ? onBrowseClick : undefined}
       >
         <input
           ref={fileInputRef}
           type="file"
           className="hidden"
           accept="image/*,.pdf"
-          onChange={handleFileChange}
-          disabled={uploadReceiptMutation.isPending}
+          onChange={onInputChange}
+          disabled={uploadMutation.isPending}
         />
-        
-        <div className="space-y-3">
-          <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
-            <Camera className="text-slate-500 text-lg" />
-          </div>
-          <div>
-            {uploadReceiptMutation.isPending ? (
+
+        {!file ? (
+          <div className="space-y-3">
+            <div className="mx-auto mb-1 h-12 w-12 rounded-full bg-slate-100 grid place-items-center">
+              <Camera className="w-6 h-6 text-slate-500" />
+            </div>
+            {uploadMutation.isPending ? (
               <>
-                <p className="text-slate-700 font-medium">Bon wordt verwerkt...</p>
+                <p className="font-medium text-slate-700">Bon wordt verwerkt…</p>
                 <p className="text-sm text-slate-500">Even geduld terwijl we de tekst analyseren</p>
               </>
             ) : (
               <>
-                <p className="text-slate-700 font-medium">Sleep je bon hierheen</p>
+                <p className="font-medium text-slate-700">Sleep je bon hierheen</p>
                 <p className="text-sm text-slate-500">of klik om een foto te selecteren</p>
               </>
             )}
+            <p className="text-xs text-slate-400">PNG, JPG, PDF tot 10MB</p>
+
+            <div className="mt-3 flex items-center justify-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onBrowseClick}
+                disabled={uploadMutation.isPending}
+                className="inline-flex items-center gap-2"
+              >
+                <Camera className="w-4 h-4" />
+                Camera
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onBrowseClick}
+                disabled={uploadMutation.isPending}
+                className="inline-flex items-center gap-2"
+              >
+                <FolderOpen className="w-4 h-4" />
+                Galerij
+              </Button>
+            </div>
           </div>
-          <p className="text-xs text-slate-400">PNG, JPG, PDF tot 10MB</p>
-        </div>
+        ) : (
+          <div className="text-left">
+            <div className="flex items-start gap-4">
+              <div className="flex-1">
+                <div className="text-sm text-slate-700">
+                  <span className="font-medium">Bestand:</span> {file.name}{" "}
+                  <span className="text-slate-400">
+                    ({Math.ceil(file.size / 1024)} KB)
+                  </span>
+                </div>
+
+                {isImage && previewUrl ? (
+                  <img
+                    src={previewUrl}
+                    alt="Bon preview"
+                    className="mt-3 max-h-64 rounded-md border border-slate-200"
+                  />
+                ) : (
+                  <div className="mt-3 inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm">
+                    PDF geselecteerd — voorbeeld niet beschikbaar
+                  </div>
+                )}
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onClear}
+                disabled={uploadMutation.isPending}
+                className="shrink-0 inline-flex items-center gap-2"
+                title="Bestand verwijderen"
+              >
+                <Trash2 className="w-4 h-4 text-red-600" />
+                Verwijder
+              </Button>
+            </div>
+
+            <div className="mt-4 flex gap-3">
+              <Button
+                type="button"
+                onClick={onStartUpload}
+                disabled={uploadMutation.isPending || !file}
+                className="inline-flex items-center gap-2"
+              >
+                <CloudUpload className="w-4 h-4" />
+                Verwerk bon
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onBrowseClick}
+                disabled={uploadMutation.isPending}
+              >
+                Ander bestand…
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Quick Capture */}
-      <div className="mt-4 flex space-x-3">
-        <Button 
-          variant="outline"
-          onClick={handleClick}
-          disabled={uploadReceiptMutation.isPending}
-          className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-3 px-4 rounded-lg transition-colors"
-        >
-          <Camera className="mr-2" size={16} />
-          Camera
-        </Button>
-        <Button 
-          variant="outline"
-          onClick={handleClick}
-          disabled={uploadReceiptMutation.isPending}
-          className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-3 px-4 rounded-lg transition-colors"
-        >
-          <FolderOpen className="mr-2" size={16} />
-          Galerij
-        </Button>
-      </div>
+      {/* Primary action: altijd naar scherm 2 */}
+      <Button
+        type="button"
+        onClick={goSplit}
+        className="mt-6 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5"
+      >
+        <Calculator className="w-4 h-4 mr-2" />
+        Afronden & Rekening Verdelen
+      </Button>
 
-      {/* Afronden Button */}
-      <div className="mt-6 pt-4 border-t border-slate-200">
-        <Button 
-          onClick={() => setLocation("/bill-splitting")}
-          className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
-        >
-          <Calculator className="mr-2" size={16} />
-          Afronden & Rekening Verdelen
-        </Button>
-        <p className="text-xs text-slate-500 text-center mt-2">
-          Ga naar het verdeel scherm om kosten op te splitsen
-        </p>
-      </div>
+      <p className="mt-2 text-xs text-slate-500 text-center">
+        Je kunt ook eerst afronden en later de bon uploaden.
+      </p>
     </div>
   );
 }
