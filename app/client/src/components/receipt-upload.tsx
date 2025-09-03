@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useState, useRef, useMemo, useCallback } from "react";
+import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { CloudUpload, Camera, FolderOpen, Calculator, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -27,10 +27,18 @@ export default function ReceiptUpload() {
 
   const isImage = useMemo(() => (file ? file.type.startsWith("image/") : false), [file]);
 
-  const revokePreview = () => {
+  // preview URL netjes opruimen
+  const revokePreview = useCallback(() => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
-  };
+  }, [previewUrl]);
+
+  useEffect(() => {
+    return () => {
+      // cleanup bij unmount
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   const setSelectedFile = useCallback(
     (f: File) => {
@@ -40,7 +48,7 @@ export default function ReceiptUpload() {
         setPreviewUrl(URL.createObjectURL(f));
       }
     },
-    [previewUrl]
+    [revokePreview]
   );
 
   const validateAndSet = (f: File | undefined | null) => {
@@ -132,7 +140,7 @@ export default function ReceiptUpload() {
   };
 
   const goSplit = () => {
-    // Navigatie naar scherm 2 — los van uploadstatus
+    // Client-side navigatie naar scherm 2 (geen page refresh)
     setLocation("/bill-splitting");
   };
 
@@ -268,23 +276,20 @@ export default function ReceiptUpload() {
         )}
       </div>
 
-      {/* Primary action: altijd naar scherm 2 */}
-      <a
-  href="/bill-splitting"
-  className="mt-6 w-full inline-flex items-center justify-center rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5"
->
-  <Calculator className="w-4 h-4 mr-2" />
-  Afronden & Rekening Verdelen
-</a>
-
-<p className="mt-2 text-xs text-slate-500 text-center">
-  Je kunt ook eerst afronden en later de bon uploaden.
-</p>
-
-
-      <p className="mt-2 text-xs text-slate-500 text-center">
-        Je kunt ook eerst afronden en later de bon uploaden.
-      </p>
+      {/* Primaire actie: ALTIJD client-side naar scherm 2, geen refresh */}
+      <div className="mt-6">
+        <Button
+          type="button"
+          onClick={goSplit}
+          className="w-full inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+        >
+          <Calculator className="w-4 h-4" />
+          Afronden &amp; Rekening Verdelen
+        </Button>
+        <p className="mt-2 text-xs text-slate-500 text-center">
+          Je kunt ook eerst afronden en later de bon uploaden.
+        </p>
+      </div>
     </div>
   );
 }

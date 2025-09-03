@@ -1,48 +1,62 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft, Receipt, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useOrders } from "@/hooks/use-orders";
-import ReceiptUpload from "@/components/receipt-upload";
+import ReceiptUpload from "@/components/receipt-upload"; // 👈 BELANGRIJK: deze import ontbrak
 
 export default function BillSplitting() {
   const [, setLocation] = useLocation();
-  const { data: orders = [] } = useOrders();
+  const { data: orders = [], people = [] } = useOrders();
   const { toast } = useToast();
   const [tipPercentage, setTipPercentage] = useState(0);
 
-  const goBack = () => {
-    setLocation("/");
-  };
+  const goBack = () => setLocation("/");
 
-  const totalEstimated = orders.reduce((sum, order) => sum + (order.estimatedPrice || 0) * order.quantity, 0);
-  
-  // Group orders by user
-  const ordersByUser = orders.reduce((acc, order) => {
-    if (!acc[order.userName]) {
-      acc[order.userName] = {
-        orders: [],
-        total: 0,
-        color: order.userColor,
-        initial: order.userInitial
-      };
-    }
-    acc[order.userName].orders.push(order);
-    acc[order.userName].total += (order.estimatedPrice || 0) * order.quantity;
+  const totalEstimated = useMemo(
+    () => orders.reduce((sum, o) => sum + (o.price || 0) * (o.qty || 0), 0),
+    [orders]
+  );
+
+  // Group by personName
+  const ordersByUser = useMemo(() => {
+    const acc: Record<
+      string,
+      { orders: typeof orders; total: number; color: string; initial: string }
+    > = {};
+
+    orders.forEach((o) => {
+      const key = o.personName?.trim() || "Onbekend";
+      if (!acc[key]) {
+        const p = people.find(
+          (pp) => pp.name.toLowerCase() === key.toLowerCase()
+        );
+        acc[key] = {
+          orders: [],
+          total: 0,
+          color: p?.color || "bg-blue-500",
+          initial: p?.initial || key.charAt(0).toUpperCase(),
+        };
+      }
+      acc[key].orders.push(o as any);
+      acc[key].total += (o.price || 0) * (o.qty || 0);
+    });
+
     return acc;
-  }, {} as Record<string, { orders: typeof orders; total: number; color: string; initial: string }>);
+  }, [orders, people]);
 
   const handleTipDistribution = (percentage: number) => {
     const tipAmount = totalEstimated * (percentage / 100);
-    const perPersonTip = tipAmount / Object.keys(ordersByUser).length;
-    
+    const persons = Math.max(1, Object.keys(ordersByUser).length);
+    const perPersonTip = tipAmount / persons;
+
     toast({
       title: "Fooi verdeeld",
-      description: `€${tipAmount.toFixed(2)} fooi (${percentage}%) verdeeld over ${Object.keys(ordersByUser).length} personen: €${perPersonTip.toFixed(2)} per persoon`,
+      description: `€${tipAmount.toFixed(2)} fooi (${percentage}%) verdeeld over ${persons} personen: €${perPersonTip.toFixed(2)} p.p.`,
     });
-    
+
     setTipPercentage(percentage);
   };
 
@@ -69,11 +83,10 @@ export default function BillSplitting() {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          
-          {/* Left Column: Current Orders */}
+          {/* Left: orders per persoon */}
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -92,14 +105,9 @@ export default function BillSplitting() {
                     {Object.entries(ordersByUser).map(([userName, userData]) => (
                       <div key={userName} className="p-4 bg-slate-50 rounded-lg">
                         <div className="flex items-center gap-3 mb-2">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold ${
-                            userData.color === 'primary' ? 'bg-blue-500' :
-                            userData.color === 'amber' ? 'bg-amber-500' :
-                            userData.color === 'purple' ? 'bg-purple-500' :
-                            userData.color === 'emerald' ? 'bg-emerald-500' :
-                            userData.color === 'red' ? 'bg-red-500' :
-                            'bg-blue-500'
-                          }`}>
+                          <div
+                            className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold ${userData.color}`}
+                          >
                             {userData.initial}
                           </div>
                           <h3 className="font-semibold text-slate-800">{userName}</h3>
@@ -107,25 +115,37 @@ export default function BillSplitting() {
                         <div className="space-y-1 ml-11">
                           {userData.orders.map((order) => (
                             <div key={order.id} className="flex justify-between text-sm">
-                              <span>{order.quantity}x {order.itemName}</span>
-                              <span>€{((order.estimatedPrice || 0) * order.quantity).toFixed(2)}</span>
+                              <span>{order.qty}x {order.label}</span>
+                              <span>€{(((order.price || 0) * (order.qty || 0))).toFixed(2)}</span>
                             </div>
                           ))}
                           <div className="flex justify-between font-semibold text-slate-800 border-t pt-1 mt-2">
                             <span>Subtotaal:</span>
                             <span>€{userData.total.toFixed(2)}</span>
                           </div>
+
                           {tipPercentage > 0 && (
-                            <div className="flex justify-between text-sm text-slate-600">
-                              <span>Fooi ({tipPercentage}%):</span>
-                              <span>€{(userData.total * (tipPercentage / 100) / Object.keys(ordersByUser).length).toFixed(2)}</span>
-                            </div>
-                          )}
-                          {tipPercentage > 0 && (
-                            <div className="flex justify-between font-bold text-emerald-600 border-t pt-1">
-                              <span>Totaal:</span>
-                              <span>€{(userData.total + (userData.total * (tipPercentage / 100) / Object.keys(ordersByUser).length)).toFixed(2)}</span>
-                            </div>
+                            <>
+                              <div className="flex justify-between text-sm text-slate-600">
+                                <span>Fooi ({tipPercentage}%):</span>
+                                <span>
+                                  €{(
+                                    (totalEstimated * (tipPercentage / 100)) /
+                                    Math.max(1, Object.keys(ordersByUser).length)
+                                  ).toFixed(2)}
+                                </span>
+                              </div>
+                              <div className="flex justify-between font-bold text-emerald-600 border-t pt-1">
+                                <span>Totaal:</span>
+                                <span>
+                                  €{(
+                                    userData.total +
+                                    (totalEstimated * (tipPercentage / 100)) /
+                                      Math.max(1, Object.keys(ordersByUser).length)
+                                  ).toFixed(2)}
+                                </span>
+                              </div>
+                            </>
                           )}
                         </div>
                       </div>
@@ -135,7 +155,7 @@ export default function BillSplitting() {
               </CardContent>
             </Card>
 
-            {/* Tip Section */}
+            {/* Fooi */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -157,13 +177,13 @@ export default function BillSplitting() {
                       </Button>
                     ))}
                   </div>
-                  
+
                   {totalEstimated > 0 && (
                     <div className="bg-slate-50 p-4 rounded-lg">
                       <div className="flex justify-between items-center">
                         <span className="font-semibold">Totaal rekening:</span>
                         <span className="text-lg font-bold">
-                          €{(totalEstimated + (totalEstimated * (tipPercentage / 100))).toFixed(2)}
+                          €{(totalEstimated + totalEstimated * (tipPercentage / 100)).toFixed(2)}
                         </span>
                       </div>
                       {tipPercentage > 0 && (
@@ -178,7 +198,7 @@ export default function BillSplitting() {
             </Card>
           </div>
 
-          {/* Right Column: Receipt Upload */}
+          {/* Right: bon upload (optioneel) */}
           <div className="space-y-6">
             <Card>
               <CardHeader>

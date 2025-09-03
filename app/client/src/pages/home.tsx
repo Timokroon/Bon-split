@@ -4,7 +4,6 @@ import OrdersList from "../components/orders-list";
 import ReceiptUpload from "../components/receipt-upload";
 import PeopleManager, { Person } from "../components/people-manager";
 import { onAddOrder, type AddOrderPayload } from "../lib/order-bus";
-// Icons
 import { User, PlusCircle, List as ListIcon } from "lucide-react";
 
 export type OrderItem = {
@@ -18,6 +17,33 @@ export type OrderItem = {
 export default function Home() {
   const [people, setPeople] = React.useState<Person[]>([]);
   const [orders, setOrders] = React.useState<OrderItem[]>([]);
+
+  // INIT: laad uit localStorage (éénmalig)
+  React.useEffect(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem("peopleV1") || "[]");
+      if (Array.isArray(p) && p.length) setPeople(p);
+    } catch {}
+    try {
+      const o = JSON.parse(localStorage.getItem("ordersV1") || "[]");
+      if (Array.isArray(o) && o.length) setOrders(o);
+    } catch {}
+  }, []);
+
+  // PERSIST + broadcast bij wijzigingen
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("peopleV1", JSON.stringify(people));
+      window.dispatchEvent(new Event("ordersUpdated"));
+    } catch {}
+  }, [people]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("ordersV1", JSON.stringify(orders));
+      window.dispatchEvent(new Event("ordersUpdated"));
+    } catch {}
+  }, [orders]);
 
   const totalItems = React.useMemo(
     () => orders.reduce((s, o) => s + (o.qty || 0), 0),
@@ -88,7 +114,6 @@ export default function Home() {
             <div className="h-8 w-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">
               €
             </div>
-            {/* App-naam aangepast */}
             <h1 className="text-xl font-bold text-slate-800">Group Splitter</h1>
           </div>
         </div>
@@ -97,9 +122,8 @@ export default function Home() {
       {/* 3 kolommen */}
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Kolom 1: NIEUWE BESTELLING boven, MENSEN TOEVOEGEN eronder */}
+          {/* Kolom 1: NIEUWE BESTELLING + MENSEN */}
           <div className="space-y-6">
-            {/* Nieuwe Bestelling */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
               <div className="flex items-center gap-2 mb-4">
                 <PlusCircle className="w-5 h-5 text-emerald-600" />
@@ -110,7 +134,6 @@ export default function Home() {
               <OrderInput people={people} />
             </div>
 
-            {/* Mensen toevoegen */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
               <div className="flex items-center gap-2 mb-3">
                 <User className="w-5 h-5 text-slate-700" />
@@ -149,9 +172,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Kolom 3: BON UPLOADEN (alleen inner card, geen extra rand eromheen) */}
+          {/* Kolom 3: BON UPLOADEN */}
           <div>
-            {/* Geen extra border/wrapper — ReceiptUpload rendert zijn eigen mooie kaart */}
             <ReceiptUpload />
           </div>
         </div>
