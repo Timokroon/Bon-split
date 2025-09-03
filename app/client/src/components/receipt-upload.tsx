@@ -269,14 +269,18 @@ export default function ReceiptUpload() {
       </div>
 
       {/* Primary action: altijd naar scherm 2 */}
-      <Button
-        type="button"
-        onClick={goSplit}
-        className="mt-6 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5"
-      >
-        <Calculator className="w-4 h-4 mr-2" />
-        Afronden & Rekening Verdelen
-      </Button>
+      <a
+  href="/bill-splitting"
+  className="mt-6 w-full inline-flex items-center justify-center rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5"
+>
+  <Calculator className="w-4 h-4 mr-2" />
+  Afronden & Rekening Verdelen
+</a>
+
+<p className="mt-2 text-xs text-slate-500 text-center">
+  Je kunt ook eerst afronden en later de bon uploaden.
+</p>
+
 
       <p className="mt-2 text-xs text-slate-500 text-center">
         Je kunt ook eerst afronden en later de bon uploaden.
