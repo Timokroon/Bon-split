@@ -35,3 +35,8 @@ tmp/
 
 # Archives
 *.zip
+.env
+
+
+app/uploads/
+
