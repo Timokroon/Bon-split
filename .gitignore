@@ -40,3 +40,9 @@ tmp/
 
 app/uploads/
 
+
+# env
+.env
+
+# runtime uploads
+app/uploads/
